@@ -394,7 +394,7 @@ def __(db: dbs.PostgreSQLDB, target_table: str, csv_format: bool = None, skip_he
 
     columns = ''
     if format == Format.JSONL:
-        columns = ' ' + ', '.join(['data'])
+        columns = ' (' + ', '.join(['data']) + ')'
 
     sql = f'COPY {target_table}{columns} FROM STDIN WITH'
     if csv_format or format == Format.CSV:
@@ -432,7 +432,7 @@ def __(db: dbs.RedshiftDB, target_table: str, csv_format: bool = None, skip_head
 
     columns = ''
     if format == Format.JSONL:
-        columns = ' ' + ', '.join(['data'])
+        columns = ' (' + ', '.join(['data']) + ')'
 
     sql = f"COPY {target_table}{columns} FROM 's3://{db.aws_s3_bucket_name}/{tmp_file_name}' access_key_id '{db.aws_access_key_id}' secret_access_key '{db.aws_secret_access_key}'"
 
