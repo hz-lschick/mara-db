@@ -4,12 +4,23 @@ Shell command generation for
 - copying data from, into and between databases
 """
 
+import enum
 import shlex
 import sys
 from functools import singledispatch
+import typing as t
 
 from mara_db import dbs, config
 from multimethod import multidispatch
+
+
+class Format(enum.EnumMeta):
+    """Different formats for piping"""
+    CSV = 'csv'         # CSV file
+    JSONL = 'jsonl'     # New line delimited JSON stream
+    AVRO = 'avro'       # Apache Avro
+    PARQUET = 'parquet' # Apache Parquet
+    ORC = 'orc'         # Apache ORC
 
 
 @singledispatch
@@ -194,7 +205,8 @@ def copy_to_stdout_command(db: object,
                            header: bool = None,
                            footer: bool = None,
                            delimiter_char: str = None,
-                           csv_format: bool = None) -> str:
+                           csv_format: bool = None,
+                           format: Format = None) -> str:
     """
     Creates a shell command that receives a query from stdin, executes it and writes the output to stdout
 
@@ -205,6 +217,7 @@ def copy_to_stdout_command(db: object,
         footer: Whether a footer will be included or not. False by default. (Only implemented for PostgreSQLDB)
         delimiter_char: str to delimit the fields in one row. Default: tab character
         csv_format: Double quote 'difficult' strings (Only implemented for PostgreSQLDB)
+        format: The format passed to stdout
 
     Returns:
         The composed shell command
@@ -218,14 +231,16 @@ def copy_to_stdout_command(db: object,
 
 
 @copy_to_stdout_command.register(str)
-def __(alias: str, header: bool = None, footer: bool = None, delimiter_char: str = None, csv_format: bool = None):
+def __(alias: str, header: bool = None, footer: bool = None, delimiter_char: str = None, csv_format: bool = None,
+       format: Format = None):
     return copy_to_stdout_command(dbs.db(alias), header=header, footer=footer,
-                                  delimiter_char=delimiter_char, csv_format=csv_format)
+                                  delimiter_char=delimiter_char, csv_format=csv_format,
+                                  format=format)
 
 
 @copy_to_stdout_command.register(dbs.PostgreSQLDB)
 def __(db: dbs.PostgreSQLDB, header: bool = None, footer: bool = None,
-       delimiter_char: str = None, csv_format: bool = None):
+       delimiter_char: str = None, csv_format: bool = None, format: Format = None):
     if header is None:
         header = False
 
@@ -235,13 +250,15 @@ def __(db: dbs.PostgreSQLDB, header: bool = None, footer: bool = None,
     if delimiter_char is None:
         delimiter_char = '\t'
 
-    if csv_format:
+    if csv_format or format == Format.CSV:
         assert not (footer or header), 'unsupported when csv_format = True'
         return r" sed '/\;/q' | sed 's/\;.*//' " + '\\\n' \
                + f'''| (echo "COPY (" && cat && echo ") TO STDOUT WITH {'CSV ' if csv_format else ''} DELIMITER '{delimiter_char}' ") \\\n''' \
                + '  | ' + query_command(db, echo_queries=False) + ' --variable=FETCH_COUNT=10000 \\\n' \
                + "  | sed '/^$/d'"  # remove empty lines
     else:
+        if format:
+            raise ValueError(f'Unsupported piping format for PostgreSQLDB: {format}')
         header_argument = '--tuples-only' if not header else ''
         footer_argument = '--pset="footer=off"' if not footer else ''
         return (query_command(db, echo_queries=False) + ' --variable=FETCH_COUNT=10000'
@@ -252,20 +269,25 @@ def __(db: dbs.PostgreSQLDB, header: bool = None, footer: bool = None,
 
 
 @copy_to_stdout_command.register(dbs.MysqlDB)
-def __(db: dbs.MysqlDB, header: bool = None, footer: bool = None, delimiter_char: str = None, csv_format: bool = None):
+def __(db: dbs.MysqlDB, header: bool = None, footer: bool = None, delimiter_char: str = None, csv_format: bool = None,
+       format: Format = None):
+    assert all(v is None for v in [footer, delimiter_char]), "unimplemented parameter for MysqlDB"
+    if csv_format == False or not format and format != Format.CSV:
+        raise ValueError(f'Unsupported piping format for MysqlDB: {format}')
+
     if header is None:
         header = False
 
-    assert all(v is None for v in [footer, delimiter_char, csv_format]), "unimplemented parameter for MysqlDB"
-    header_argument = '--skip-column-names' if header is False else ''
+    header_argument = '--skip-column-names' if not header else ''
     return query_command(db) + ' ' + header_argument
 
 
 @copy_to_stdout_command.register(dbs.SQLServerDB)
 def __(db: dbs.SQLServerDB, header: bool = None, footer: bool = None, delimiter_char: str = None,
-       csv_format: bool = None):
-    assert all(
-        v is None for v in [header, footer, delimiter_char, csv_format]), "unimplemented parameter for SQLServerDB"
+       csv_format: bool = None, format: Format = None):
+    assert all(v is None for v in [header, footer, delimiter_char]), "unimplemented parameter for SQLServerDB"
+    if csv_format == False or not format and format != Format.CSV:
+        raise ValueError(f'Unsupported piping format for SQLServerDB: {format}')
     return query_command(db, echo_queries=False) + " -m csv"
 
 
@@ -289,21 +311,28 @@ def __(db: dbs.SqlcmdSQLServerDB, header: bool = None, footer: bool = None, deli
 
 
 @copy_to_stdout_command.register(dbs.OracleDB)
-def __(db: dbs.OracleDB, header: bool = None, footer: bool = None, delimiter_char: str = None, csv_format: bool = None):
-    assert all(v is None for v in [header, footer, delimiter_char, csv_format]), "unimplemented parameter for OracleDB"
+def __(db: dbs.OracleDB, header: bool = None, footer: bool = None, delimiter_char: str = None, csv_format: bool = None,
+       format: Format = None):
+    assert all(v is None for v in [header, footer, delimiter_char]), "unimplemented parameter for OracleDB"
+    if csv_format == False or not format and format != Format.CSV:
+        raise ValueError(f'Unsupported piping format for OracleDB: {format}')
     return "(echo 'set markup csv on\nset feedback off\nset heading off' && cat)" \
            + " \\\n  | " + query_command(db)
 
 
 @copy_to_stdout_command.register(dbs.SQLiteDB)
-def __(db: dbs.SQLiteDB, header: bool = None, footer: bool = None, delimiter_char: str = None, csv_format: bool = None):
+def __(db: dbs.SQLiteDB, header: bool = None, footer: bool = None, delimiter_char: str = None, csv_format: bool = None,
+       format: Format = None):
+    assert all(v is None for v in [footer]), "unimplemented parameter for SQLiteDB"
+    if csv_format == False or not format and format != Format.CSV:
+        raise ValueError(f'Unsupported piping format for SQLiteDB: {format}')
+
     if header is None:
         header = False
 
     if delimiter_char is None:
         delimiter_char = '\t'
 
-    assert all(v is None for v in [footer, csv_format]), "unimplemented parameter for SQLiteDB"
     header_argument = '-noheader' if not header else ''
     return query_command(db) + " " + header_argument + f" -separator '{delimiter_char}' -quote"
 
@@ -315,7 +344,8 @@ def __(db: dbs.SQLiteDB, header: bool = None, footer: bool = None, delimiter_cha
 def copy_from_stdin_command(db: object, target_table: str,
                             csv_format: bool = None, skip_header: bool = None,
                             delimiter_char: str = None, quote_char: str = None,
-                            null_value_string: str = None, timezone: str = None) -> str:
+                            null_value_string: str = None, timezone: str = None,
+                            format: Format = None) -> str:
     """
     Creates a shell command that receives data from stdin and writes it to a table.
 
@@ -331,6 +361,7 @@ def copy_from_stdin_command(db: object, target_table: str,
         quote_char: The character for quoting strings
         null_value_string: The string that denotes NULL values
         timezone: Sets the timezone of the client, if applicable
+        format: The format passed from stdin
 
     Returns:
         The composed shell command
@@ -346,18 +377,27 @@ def copy_from_stdin_command(db: object, target_table: str,
 
 @copy_from_stdin_command.register(str)
 def __(alias: str, target_table: str, csv_format: bool = None, skip_header: bool = None,
-       delimiter_char: str = None, quote_char: str = None, null_value_string: str = None, timezone: str = None):
+       delimiter_char: str = None, quote_char: str = None, null_value_string: str = None,
+       timezone: str = None, format: Format = None):
     return copy_from_stdin_command(
         dbs.db(alias), target_table=target_table, csv_format=csv_format, skip_header=skip_header,
         delimiter_char=delimiter_char, quote_char=quote_char,
-        null_value_string=null_value_string, timezone=timezone)
+        null_value_string=null_value_string, timezone=timezone, format=format)
 
 
 @copy_from_stdin_command.register(dbs.PostgreSQLDB)
 def __(db: dbs.PostgreSQLDB, target_table: str, csv_format: bool = None, skip_header: bool = None,
-       delimiter_char: str = None, quote_char: str = None, null_value_string: str = None, timezone: str = None):
-    sql = f'COPY {target_table} FROM STDIN WITH'
-    if csv_format:
+       delimiter_char: str = None, quote_char: str = None, null_value_string: str = None, timezone: str = None,
+       format: Format = None):
+    if format and format not in [Format.CSV, Format.JSONL]:
+        raise ValueError(f'Unsupported piping format for PostgreSQLDB: {format}')
+
+    columns = ''
+    if format == Format.JSONL:
+        columns = ' ' + ', '.join(['data'])
+
+    sql = f'COPY {target_table}{columns} FROM STDIN WITH'
+    if csv_format or format == Format.CSV:
         sql += ' CSV'
     if skip_header:
         sql += ' HEADER'
@@ -371,12 +411,18 @@ def __(db: dbs.PostgreSQLDB, target_table: str, csv_format: bool = None, skip_he
     # escape double quotes
     sql = sql.replace('"','\\"')
 
-    return f'{query_command(db, timezone)} \\\n      --command="{sql}"'
+    sed_stdin = ''
+    if format == Format.JSONL:
+        # escapes JSON escapings since PostgreSQL interprets C-escapes in TEXT mode
+        sed_stdin += "sed 's/\\\\/\\\\x5C/g' \\\n| "
+
+    return f'{sed_stdin}{query_command(db, timezone)} \\\n      --command="{sql}"'
 
 
 @copy_from_stdin_command.register(dbs.RedshiftDB)
 def __(db: dbs.RedshiftDB, target_table: str, csv_format: bool = None, skip_header: bool = None,
-       delimiter_char: str = None, quote_char: str = None, null_value_string: str = None, timezone: str = None):
+       delimiter_char: str = None, quote_char: str = None, null_value_string: str = None, timezone: str = None,
+       format: Format = None):
     import uuid
     import datetime
 
@@ -384,9 +430,13 @@ def __(db: dbs.RedshiftDB, target_table: str, csv_format: bool = None, skip_head
     s3_write_command = f'AWS_ACCESS_KEY_ID={db.aws_access_key_id} AWS_SECRET_ACCESS_KEY={db.aws_secret_access_key} aws s3 cp - s3://{db.aws_s3_bucket_name}/{tmp_file_name}'
     s3_delete_tmp_file_command = f'AWS_ACCESS_KEY_ID={db.aws_access_key_id} AWS_SECRET_ACCESS_KEY={db.aws_secret_access_key} aws s3 rm s3://{db.aws_s3_bucket_name}/{tmp_file_name}'
 
-    sql = f"COPY {target_table} FROM 's3://{db.aws_s3_bucket_name}/{tmp_file_name}' access_key_id '{db.aws_access_key_id}' secret_access_key '{db.aws_secret_access_key}'"
+    columns = ''
+    if format == Format.JSONL:
+        columns = ' ' + ', '.join(['data'])
 
-    if csv_format:
+    sql = f"COPY {target_table}{columns} FROM 's3://{db.aws_s3_bucket_name}/{tmp_file_name}' access_key_id '{db.aws_access_key_id}' secret_access_key '{db.aws_secret_access_key}'"
+
+    if csv_format or format == Format.CSV:
         sql += ' CSV'
     if skip_header:
         sql += ' HEADER'
@@ -397,14 +447,33 @@ def __(db: dbs.RedshiftDB, target_table: str, csv_format: bool = None, skip_head
     if quote_char is not None:
         sql += f" QUOTE AS '{quote_char}'"
 
+    sed_stdin = ''
+    if format == Format.JSONL:
+        # escapes JSON escapings since PostgreSQL interprets C-escapes in TEXT mode
+        sed_stdin += "sed 's/\\\\/\\\\x5C/g' \\\n| "
+
     return s3_write_command + ' &&\n\n' \
-            + f'{query_command(db, timezone)} \\\n      --command="{sql}" \\\n  || /bin/false \\\n  ; RC=$?\n\n' \
+            + f'{sed_stdin}{query_command(db, timezone)} \\\n      --command="{sql}" \\\n  || /bin/false \\\n  ; RC=$?\n\n' \
             + s3_delete_tmp_file_command+' &&\n  $(exit $RC) || /bin/false'
 
 
 @copy_from_stdin_command.register(dbs.BigQueryDB)
 def __(db: dbs.BigQueryDB, target_table: str, csv_format: bool = None, skip_header: bool = None,
-       delimiter_char: str = None, quote_char: str = None, null_value_string: str = None, timezone: str = None):
+       delimiter_char: str = None, quote_char: str = None, null_value_string: str = None, timezone: str = None,
+       format: Format = None):
+
+    if csv_format or format == Format.CSV:
+        bq_format = 'CSV'
+    elif not format or format == Format.JSONL:
+        bq_format = 'NEWLINE_DELIMITED_JSON'
+    elif format == Format.AVRO:
+        bq_format = 'AVRO'
+    elif format == Format.PARQUET:
+        bq_format = 'PARQUET'
+    elif format == Format.ORC:
+        bq_format = 'ORC'
+    else:
+        raise ValueError(f'Unsupported format for BigQueryDB: {format}')
 
     bq_load_command = ('bq load'
         # global parameters
@@ -416,21 +485,12 @@ def __(db: dbs.BigQueryDB, target_table: str, csv_format: bool = None, skip_head
         + (f' --dataset_id={db.dataset}' if db.dataset else '')
         # command parameters
         + (f' --skip_leading_rows=1' if skip_header else '')
+        + f' --source_format={bq_format}'
+        + (f" --field_delimiter='{delimiter_char}'" if delimiter_char else '')
+        + (f" --null_marker='{null_value_string}'" if null_value_string else '')
+        + (f" --quote='{quote_char}'" if quote_char else '')
+        + f' {target_table}'
         )
-
-    if csv_format:
-        bq_load_command += ' --source_format=CSV'
-    else:
-        bq_load_command += ' --source_format=NEWLINE_DELIMITED_JSON'
-
-    if delimiter_char is not None:
-        bq_load_command += f" --field_delimiter='{delimiter_char}'"
-    if null_value_string is not None:
-        bq_load_command += f" --null_marker='{null_value_string}'"
-    if quote_char is not None:
-        bq_load_command += f" --quote='{quote_char}'"
-
-    bq_load_command += f' {target_table}'
 
     if db.gcloud_gcs_bucket_name:
         # If defined, use Google Cloud Storage bucked used as cache for loading data
@@ -473,7 +533,8 @@ def __(db: dbs.SQLServerDB, target_table: str, csv_format: bool = None, skip_hea
 
 @multidispatch
 def copy_command(source_db: object, target_db: object, target_table: str,
-                 timezone=None, csv_format=None, delimiter_char=None) -> str:
+                 timezone=None, csv_format=None, delimiter_char=None,
+                 format: Format = None) -> str:
     """
     Creates a shell command that
     - receives a sql query from stdin
@@ -487,6 +548,7 @@ def copy_command(source_db: object, target_db: object, target_table: str,
         timezone: Sets the timezone of the client, if applicable
         csv_format: double quote 'difficult' strings
         delimiter_char: The character that separates columns, default '\t'
+        format: The piping data format to be used
 
 
     Returns:
@@ -507,121 +569,128 @@ def copy_command(source_db: object, target_db: object, target_table: str,
 
 @copy_command.register(str, str)
 def __(source_db_alias: str, target_db_alias: str, target_table: str, timezone: str = None,
-       csv_format: bool = None, delimiter_char: str = None):
+       csv_format: bool = None, delimiter_char: str = None, format: Format = None):
     return copy_command(dbs.db(source_db_alias), dbs.db(target_db_alias),
                         target_table=target_table, timezone=timezone,
-                        csv_format=csv_format, delimiter_char=delimiter_char)
+                        csv_format=csv_format, delimiter_char=delimiter_char,
+                        format=format)
 
 
 @copy_command.register(dbs.DB, str)
 def __(source_db: dbs.DB, target_db_alias: str, target_table: str, timezone: str = None,
-       csv_format: bool = None, delimiter_char: str = None):
+       csv_format: bool = None, delimiter_char: str = None, format: Format = None):
     return copy_command(source_db, dbs.db(target_db_alias),
                         target_table=target_table, timezone=timezone,
-                        csv_format=csv_format, delimiter_char=delimiter_char)
+                        csv_format=csv_format, delimiter_char=delimiter_char,
+                        format=Format)
 
 
 @copy_command.register(dbs.PostgreSQLDB, dbs.PostgreSQLDB)
 def __(source_db: dbs.PostgreSQLDB, target_db: dbs.PostgreSQLDB, target_table: str,
-       timezone: str = None, csv_format: bool = None, delimiter_char: str = None):
-    return (copy_to_stdout_command(source_db, delimiter_char=delimiter_char, csv_format=csv_format) + ' \\\n'
+       timezone: str = None, csv_format: bool = None, delimiter_char: str = None, format: Format = None):
+    return (copy_to_stdout_command(source_db, delimiter_char=delimiter_char, csv_format=csv_format, format=format) + ' \\\n'
             + '  | ' + copy_from_stdin_command(target_db, target_table=target_table,
                                                null_value_string='', timezone=timezone, csv_format=csv_format,
-                                               delimiter_char=delimiter_char))
+                                               delimiter_char=delimiter_char, format=format))
 
 
 @copy_command.register(dbs.PostgreSQLDB, dbs.BigQueryDB)
 def __(source_db: dbs.PostgreSQLDB, target_db: dbs.PostgreSQLDB, target_table: str,
-       timezone: str = None, csv_format: bool = None, delimiter_char: str = None):
-    if csv_format is None:
-        csv_format = True
-    return (copy_to_stdout_command(source_db, delimiter_char=delimiter_char, csv_format=csv_format) + ' \\\n'
+       timezone: str = None, csv_format: bool = None, delimiter_char: str = None, format: Format = None):
+    if csv_format is None and format is None:
+        format = Format.CSV
+    return (copy_to_stdout_command(source_db, delimiter_char=delimiter_char, csv_format=csv_format, format=format) + ' \\\n'
             + '  | ' + copy_from_stdin_command(target_db, target_table=target_table,
                                                timezone=timezone, csv_format=csv_format,
-                                               delimiter_char='\t' if not delimiter_char and csv_format else delimiter_char))
+                                               delimiter_char='\t' if not delimiter_char and csv_format else delimiter_char,
+                                               format=format))
 
 
 @copy_command.register(dbs.MysqlDB, dbs.PostgreSQLDB)
 def __(source_db: dbs.MysqlDB, target_db: dbs.PostgreSQLDB, target_table: str,
-       timezone: str = None, csv_format: bool = None, delimiter_char: str = None):
-    return (copy_to_stdout_command(source_db) + ' \\\n'
+       timezone: str = None, csv_format: bool = None, delimiter_char: str = None, format: Format = None):
+    return (copy_to_stdout_command(source_db, format=format) + ' \\\n'
             + '  | ' + copy_from_stdin_command(target_db, target_table=target_table,
                                                null_value_string='NULL', timezone=timezone,
-                                               csv_format=csv_format, delimiter_char=delimiter_char))
+                                               csv_format=csv_format, delimiter_char=delimiter_char,
+                                               format=format))
 
 
 @copy_command.register(dbs.MysqlDB, dbs.BigQueryDB)
 def __(source_db: dbs.MysqlDB, target_db: dbs.PostgreSQLDB, target_table: str,
-       timezone: str = None, csv_format: bool = None, delimiter_char: str = None):
-    if csv_format is None:
-        csv_format = True
-    return (copy_to_stdout_command(source_db) + ' \\\n'
+       timezone: str = None, csv_format: bool = None, delimiter_char: str = None, format: Format = None):
+    if csv_format is None and format is None:
+        format = Format.CSV
+    return (copy_to_stdout_command(source_db, format=format) + ' \\\n'
             + '  | ' + copy_from_stdin_command(target_db, target_table=target_table,
                                                null_value_string='NULL', timezone=timezone,
-                                               csv_format=csv_format, delimiter_char=delimiter_char))
+                                               csv_format=csv_format, delimiter_char=delimiter_char,
+                                               format=format))
 
 
 @copy_command.register(dbs.SQLServerDB, dbs.PostgreSQLDB)
 def __(source_db: dbs.SQLServerDB, target_db: dbs.PostgreSQLDB, target_table: str,
-       timezone: str = None, csv_format: bool = None, delimiter_char: str = None):
-    if csv_format is None:
-        csv_format = True
-    return (copy_to_stdout_command(source_db) + ' \\\n'
+       timezone: str = None, csv_format: bool = None, delimiter_char: str = None, format: Format = None):
+    if csv_format is None and format is None:
+        format = Format.CSV
+    return (copy_to_stdout_command(source_db, format=format) + ' \\\n'
             + '  | ' + copy_from_stdin_command(target_db, target_table=target_table, csv_format=csv_format,
                                                delimiter_char=delimiter_char,
-                                               skip_header=True, timezone=timezone))
+                                               skip_header=True, timezone=timezone,
+                                               format=format))
 
 
 @copy_command.register(dbs.SQLServerDB, dbs.BigQueryDB)
 def __(source_db: dbs.SQLServerDB, target_db: dbs.PostgreSQLDB, target_table: str,
-       timezone: str = None, csv_format: bool = None, delimiter_char: str = None):
-    if csv_format is None:
-        csv_format = True
-    return (copy_to_stdout_command(source_db) + ' \\\n'
+       timezone: str = None, csv_format: bool = None, delimiter_char: str = None, format: Format = None):
+    if csv_format is None and format is None:
+        format = Format.CSV
+    return (copy_to_stdout_command(source_db, format=format) + ' \\\n'
             + '  | ' + copy_from_stdin_command(target_db, target_table=target_table, csv_format=csv_format,
                                                delimiter_char=delimiter_char,
-                                               skip_header=True, timezone=timezone))
+                                               skip_header=True, timezone=timezone,
+                                               format=format))
 
 
 @copy_command.register(dbs.OracleDB, dbs.PostgreSQLDB)
 def __(source_db: dbs.OracleDB, target_db: dbs.PostgreSQLDB, target_table: str,
-       timezone: str = None, csv_format: bool = None, delimiter_char: str = None):
-    if csv_format is None:
-        csv_format = True
-    return (copy_to_stdout_command(source_db) + ' \\\n'
+       timezone: str = None, csv_format: bool = None, delimiter_char: str = None, format: Format = None):
+    if csv_format is None and format is None:
+        format = Format.CSV
+    return (copy_to_stdout_command(source_db, format=format) + ' \\\n'
             + '  | ' + copy_from_stdin_command(target_db, target_table=target_table,
                                                csv_format=csv_format, skip_header=False, delimiter_char=delimiter_char,
-                                               null_value_string='NULL', timezone=timezone))
+                                               null_value_string='NULL', timezone=timezone, format=format))
 
 
 @copy_command.register(dbs.OracleDB, dbs.BigQueryDB)
 def __(source_db: dbs.OracleDB, target_db: dbs.PostgreSQLDB, target_table: str,
-       timezone: str = None, csv_format: bool = None, delimiter_char: str = None):
-    if csv_format is None:
-        csv_format = True
-    return (copy_to_stdout_command(source_db) + ' \\\n'
+       timezone: str = None, csv_format: bool = None, delimiter_char: str = None, format: Format = None):
+    if csv_format is None and format is None:
+        format = Format.CSV
+    return (copy_to_stdout_command(source_db, format=format) + ' \\\n'
             + '  | ' + copy_from_stdin_command(target_db, target_table=target_table,
                                                csv_format=csv_format, skip_header=False, delimiter_char=delimiter_char,
-                                               null_value_string='NULL', timezone=timezone))
+                                               null_value_string='NULL', timezone=timezone, format=format))
 
 
 @copy_command.register(dbs.SQLiteDB, dbs.PostgreSQLDB)
 def __(source_db: dbs.SQLiteDB, target_db: dbs.PostgreSQLDB, target_table: str,
-       timezone: str = None, csv_format: bool = None, delimiter_char: str = None):
-    if csv_format is None:
-        csv_format = True
-    return (copy_to_stdout_command(source_db) + ' \\\n'
+       timezone: str = None, csv_format: bool = None, delimiter_char: str = None, format: Format = None):
+    if csv_format is None and format is None:
+        format = Format.CSV
+    return (copy_to_stdout_command(source_db, format=format) + ' \\\n'
             + '  | ' + copy_from_stdin_command(target_db, target_table=target_table, timezone=timezone,
                                                null_value_string='NULL', quote_char="''", csv_format=csv_format,
-                                               delimiter_char=delimiter_char))
+                                               delimiter_char=delimiter_char, format=format))
 
 
 @copy_command.register(dbs.SQLiteDB, dbs.BigQueryDB)
 def __(source_db: dbs.SQLiteDB, target_db: dbs.PostgreSQLDB, target_table: str,
-       timezone: str = None, csv_format: bool = None, delimiter_char: str = None):
-    if csv_format is None:
-        csv_format = True
-    return (copy_to_stdout_command(source_db) + ' \\\n'
+       timezone: str = None, csv_format: bool = None, delimiter_char: str = None, format: Format = None):
+    if csv_format is None and format is None:
+        format = Format.CSV
+    return (copy_to_stdout_command(source_db, format=format) + ' \\\n'
             + '  | ' + copy_from_stdin_command(target_db, target_table=target_table, timezone=timezone,
                                                null_value_string='NULL', quote_char="''", csv_format=csv_format,
-                                               delimiter_char=delimiter_char))
+                                               delimiter_char=delimiter_char, format=format))
