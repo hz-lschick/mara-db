@@ -14,18 +14,18 @@ class CsvFormat(Format):
     """
     CSV file format. See https://tools.ietf.org/html/rfc4180
     """
-    def __init__(self, delimiter_char: str = None, quote_char: str = None, with_header_line: bool = None):
+    def __init__(self, delimiter_char: str = None, quote_char: str = None, header: bool = None):
         """
         CSV file format. See https://tools.ietf.org/html/rfc4180
 
         Args:
-            header_line: If a header line should be added
             delimiter_char: The character that separates columns
             quote_char: The character for quoting strings
+            header: Whether a csv header with the column name(s) is part of the CSV file.
         """
         self.delimiter_char = delimiter_char
         self.quote_char = quote_char
-        self.with_header_line = with_header_line
+        self.header = header
 
 
 class JsonlFormat(Format):
