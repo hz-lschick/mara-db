@@ -204,7 +204,7 @@ def __(db: dbs.PostgreSQLDB, header: bool = None, footer: bool = None,
             if header is None:
                 header = pipe_format.header
         else:
-            raise ValueError(f'Unsupported pipe_format for PostgreSQLDB: {format}')
+            raise ValueError(f'Unsupported pipe_format for PostgreSQLDB: {pipe_format}')
 
     if header is None:
         header = False
@@ -343,8 +343,8 @@ def __(alias: str, target_table: str, csv_format: bool = None, skip_header: bool
 def __(db: dbs.PostgreSQLDB, target_table: str, csv_format: bool = None, skip_header: bool = None,
        delimiter_char: str = None, quote_char: str = None, null_value_string: str = None, timezone: str = None,
        pipe_format: Format = None):
-    if pipe_format and type(format) not in [CsvFormat, JsonlFormat]:
-        raise ValueError(f'Unsupported pipe_format for PostgreSQLDB: {format}')
+    if pipe_format and type(pipe_format) not in [CsvFormat, JsonlFormat]:
+        raise ValueError(f'Unsupported pipe_format for PostgreSQLDB: {pipe_format}')
 
     columns = ''
     if isinstance(pipe_format, JsonlFormat):

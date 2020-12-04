@@ -30,19 +30,23 @@ class CsvFormat(Format):
 
 class JsonlFormat(Format):
     """New line delimited JSON stream. See https://en.wikipedia.org/wiki/JSON_streaming"""
-    pass
+    def __init__(self):
+        pass
 
 
 class AvroFormat(Format):
     """Apache Avro"""
-    pass
+    def __init__(self):
+        pass
 
 
 class ParquetFormat(Format):
     """Apache Parquet"""
-    pass
+    def __init__(self):
+        pass
 
 
 class OrcFormat(Format):
     """Apache ORC"""
-    pass
+    def __init__(self):
+        pass
