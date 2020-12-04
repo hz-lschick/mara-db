@@ -236,7 +236,7 @@ def __(db: dbs.MysqlDB, header: bool = None, footer: bool = None, delimiter_char
        pipe_format: Format = None):
     assert all(v is None for v in [footer, delimiter_char]), "unimplemented parameter for MysqlDB"
     if csv_format == False or not pipe_format and not isinstance(pipe_format, CsvFormat):
-        raise ValueError(f'Unsupported pipe_format for MysqlDB: {format}')
+        raise ValueError(f'Unsupported pipe_format for MysqlDB: {pipe_format}')
 
     if header is None and pipe_format and pipe_format.header is not None:
         header = pipe_format.header
@@ -253,7 +253,7 @@ def __(db: dbs.SQLServerDB, header: bool = None, footer: bool = None, delimiter_
        csv_format: bool = None, pipe_format: Format = None):
     assert all(v is None for v in [header, footer, delimiter_char]), "unimplemented parameter for SQLServerDB"
     if csv_format == False or not pipe_format and not isinstance(pipe_format, CsvFormat):
-        raise ValueError(f'Unsupported pipe_format for SQLServerDB: {format}')
+        raise ValueError(f'Unsupported pipe_format for SQLServerDB: {pipe_format}')
     return query_command(db, echo_queries=False) + " -m csv"
 
 
@@ -262,7 +262,7 @@ def __(db: dbs.OracleDB, header: bool = None, footer: bool = None, delimiter_cha
        pipe_format: Format = None):
     assert all(v is None for v in [header, footer, delimiter_char]), "unimplemented parameter for OracleDB"
     if csv_format == False or not pipe_format and not isinstance(pipe_format, CsvFormat):
-        raise ValueError(f'Unsupported pipe_format for OracleDB: {format}')
+        raise ValueError(f'Unsupported pipe_format for OracleDB: {pipe_format}')
     return "(echo 'set markup csv on\nset feedback off\nset heading off' && cat)" \
            + " \\\n  | " + query_command(db)
 
@@ -272,7 +272,7 @@ def __(db: dbs.SQLiteDB, header: bool = None, footer: bool = None, delimiter_cha
        pipe_format: Format = None):
     assert all(v is None for v in [footer]), "unimplemented parameter for SQLiteDB"
     if csv_format == False or not pipe_format and not isinstance(pipe_format, CsvFormat):
-        raise ValueError(f'Unsupported pipe_format for SQLiteDB: {format}')
+        raise ValueError(f'Unsupported pipe_format for SQLiteDB: {pipe_format}')
 
     if pipe_format:
         if isinstance(pipe_format, CsvFormat):
@@ -444,7 +444,7 @@ def __(db: dbs.BigQueryDB, target_table: str, csv_format: bool = None, skip_head
     elif isinstance(pipe_format, OrcFormat):
         bq_format = 'ORC'
     else:
-        raise ValueError(f'Unsupported pipe_format for BigQueryDB: {format}')
+        raise ValueError(f'Unsupported pipe_format for BigQueryDB: {pipe_format}')
 
     bq_load_command = ('bq load'
         # global parameters
